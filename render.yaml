@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: my-stremio-addon
+    env: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 7000
+      - key: TMDB_API_KEY
+        sync: false   # You'll fill this in on Render dashboard

@@ -1,0 +1,17 @@
+{
+  "name": "my-server-stremio-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon for personal HTTP server",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10",
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0"
+  }
+}
