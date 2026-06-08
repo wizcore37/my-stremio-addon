@@ -6,80 +6,82 @@ const BASE_URL = "https://a.111477.xyz";
 const TMDB_API_KEY = process.env.TMDB_API_KEY || "";
 const PORT = process.env.PORT || 7000;
 
-// Cache to avoid hammering the server
-const cache = { movies: null, tvs: null, lastFetch: 0 };
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL = 30 * 60 * 1000;
+const cache = {};
 
-// ── Manifest ──────────────────────────────────────────────────────────────────
+// â”€â”€ Folder definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+const FOLDERS = [
+  { path: "movies",       type: "movie",  catalogId: "myserver-movies",       name: "My Server â€“ Movies"       },
+  { path: "tvs",          type: "series", catalogId: "myserver-tvs",          name: "My Server â€“ TV Shows"     },
+  { path: "asian%20drama",type: "series", catalogId: "myserver-asiandrama",   name: "My Server â€“ Asian Drama"  },
+  { path: "k%20drama",    type: "series", catalogId: "myserver-kdrama",       name: "My Server â€“ K-Drama"      },
+  { path: "misc",         type: "movie",  catalogId: "myserver-misc",         name: "My Server â€“ Misc"         },
+];
+
+// â”€â”€ Manifest â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 const manifest = {
   id: "org.custom.myhttpserver",
-  version: "1.0.0",
+  version: "1.1.0",
   name: "My Server",
   description: "Streams movies & TV shows from your personal HTTP server",
   logo: "https://dl.strem.io/addon-logo.png",
   resources: ["catalog", "stream", "meta"],
   types: ["movie", "series"],
-  catalogs: [
-    { type: "movie", id: "myserver-movies", name: "My Server – Movies" },
-    { type: "series", id: "myserver-tvs", name: "My Server – TV Shows" },
-  ],
+  catalogs: FOLDERS.map(f => ({ type: f.type, id: f.catalogId, name: f.name })),
   idPrefixes: ["myserver:"],
 };
 
 const builder = new addonBuilder(manifest);
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Fetch directory listing and return hrefs */
+// â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 async function fetchIndex(url) {
-  const res = await axios.get(url, { timeout: 10000 });
-  const $ = cheerio.load(res.data);
-  const links = [];
-  $("a[href]").each((_, el) => {
-    const href = $(el).attr("href");
-    if (href && !href.startsWith("?") && href !== "../" && href !== "/") {
-      links.push(href);
-    }
-  });
-  return links;
+  try {
+    const res = await axios.get(url, {
+      timeout: 15000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      }
+    });
+    const $ = cheerio.load(res.data);
+    const links = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href");
+      if (href && !href.startsWith("?") && !href.startsWith("/") && href !== "../") {
+        links.push(href);
+      }
+    });
+    return links;
+  } catch (e) {
+    console.error(`Failed to fetch ${url}:`, e.message);
+    return [];
+  }
 }
 
-/** Decode %xx and strip trailing slash */
 function decodeName(href) {
   return decodeURIComponent(href.replace(/\/$/, ""));
 }
 
-/** Check if href looks like a video file */
 function isVideo(href) {
   return /\.(mkv|mp4|avi|mov|wmv|m4v|ts|webm)$/i.test(href);
 }
 
-/** Search TMDB for a title, return basic meta */
 async function tmdbSearch(title, type) {
   if (!TMDB_API_KEY) return null;
   try {
+    const cleanTitle = title.replace(/\s*\(\d{4}\)\s*$/, "").trim();
     const searchType = type === "movie" ? "movie" : "tv";
-    const res = await axios.get(
-      `https://api.themoviedb.org/3/search/${searchType}`,
-      {
-        params: { api_key: TMDB_API_KEY, query: title, page: 1 },
-        timeout: 5000,
-      }
-    );
+    const res = await axios.get(`https://api.themoviedb.org/3/search/${searchType}`, {
+      params: { api_key: TMDB_API_KEY, query: cleanTitle, page: 1 },
+      timeout: 5000,
+    });
     const result = res.data.results?.[0];
     if (!result) return null;
     return {
-      tmdbId: result.id,
-      poster: result.poster_path
-        ? `https://image.tmdb.org/t/p/w500${result.poster_path}`
-        : null,
-      background: result.backdrop_path
-        ? `https://image.tmdb.org/t/p/original${result.backdrop_path}`
-        : null,
+      poster: result.poster_path ? `https://image.tmdb.org/t/p/w500${result.poster_path}` : null,
+      background: result.backdrop_path ? `https://image.tmdb.org/t/p/original${result.backdrop_path}` : null,
       description: result.overview || "",
-      year:
-        (result.release_date || result.first_air_date || "").split("-")[0] ||
-        "",
+      year: (result.release_date || result.first_air_date || "").split("-")[0] || "",
       name: result.title || result.name || title,
     };
   } catch {
@@ -87,230 +89,153 @@ async function tmdbSearch(title, type) {
   }
 }
 
-/** Build the movies list from /movies/ */
-async function getMovies() {
+// â”€â”€ Build catalog for a folder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+async function buildCatalog(folder) {
   const now = Date.now();
-  if (cache.movies && now - cache.lastFetch < CACHE_TTL) return cache.movies;
-
-  const folders = await fetchIndex(`${BASE_URL}/movies/`);
-  const movies = [];
-
-  for (const folder of folders) {
-    if (!folder.endsWith("/")) continue; // skip non-folders
-    const name = decodeName(folder);
-    const id = `myserver:movie:${encodeURIComponent(name)}`;
-
-    // Find video file inside
-    const files = await fetchIndex(`${BASE_URL}/movies/${folder}`).catch(() => []);
-    const videoFile = files.find(isVideo);
-    const streamUrl = videoFile
-      ? `${BASE_URL}/movies/${folder}${videoFile}`
-      : null;
-
-    const tmdb = await tmdbSearch(name, "movie");
-
-    movies.push({
-      id,
-      type: "movie",
-      name: tmdb?.name || name,
-      poster: tmdb?.poster || null,
-      background: tmdb?.background || null,
-      description: tmdb?.description || "",
-      year: tmdb?.year || "",
-      streamUrl,
-    });
+  if (cache[folder.catalogId] && now - cache[folder.catalogId].time < CACHE_TTL) {
+    return cache[folder.catalogId].data;
   }
 
-  cache.movies = movies;
-  cache.lastFetch = now;
-  return movies;
-}
+  const url = `${BASE_URL}/${folder.path}/`;
+  console.log(`Fetching index: ${url}`);
+  const entries = await fetchIndex(url);
+  console.log(`Found ${entries.length} entries in ${folder.path}`);
 
-/** Build the TV shows list from /tvs/ */
-async function getTVShows() {
-  const now = Date.now();
-  if (cache.tvs && now - cache.lastFetch < CACHE_TTL) return cache.tvs;
+  const items = [];
 
-  const showFolders = await fetchIndex(`${BASE_URL}/tvs/`);
-  const shows = [];
+  for (const entry of entries) {
+    if (!entry.endsWith("/")) continue;
+    const name = decodeName(entry);
+    const id = `myserver:${folder.type}:${folder.path}:${encodeURIComponent(name)}`;
+    const tmdb = await tmdbSearch(name, folder.type);
 
-  for (const showFolder of showFolders) {
-    if (!showFolder.endsWith("/")) continue;
-    const showName = decodeName(showFolder);
-    const id = `myserver:series:${encodeURIComponent(showName)}`;
-    const tmdb = await tmdbSearch(showName, "series");
-
-    // Get seasons
-    const seasonFolders = await fetchIndex(
-      `${BASE_URL}/tvs/${showFolder}`
-    ).catch(() => []);
-    const videos = [];
-
-    for (const seasonFolder of seasonFolders) {
-      if (!seasonFolder.endsWith("/")) continue;
-      const seasonName = decodeName(seasonFolder);
-      const seasonNum = parseInt(seasonName.match(/\d+/)?.[0] || "1", 10);
-
-      const episodeFiles = await fetchIndex(
-        `${BASE_URL}/tvs/${showFolder}${seasonFolder}`
-      ).catch(() => []);
-
-      for (const file of episodeFiles) {
-        if (!isVideo(file)) continue;
-        const fileName = decodeName(file);
-        // Try to extract episode number from filename (e.g. S02E01, 2x01, E01)
-        const epMatch =
-          fileName.match(/[Ss](\d{1,2})[Ee](\d{1,2})/) ||
-          fileName.match(/(\d{1,2})x(\d{1,2})/);
-        const epNum = epMatch ? parseInt(epMatch[2], 10) : videos.length + 1;
-        const sNum = epMatch ? parseInt(epMatch[1], 10) : seasonNum;
-
-        videos.push({
-          season: sNum,
-          episode: epNum,
-          title: fileName.replace(/\.[^.]+$/, ""),
-          url: `${BASE_URL}/tvs/${showFolder}${seasonFolder}${file}`,
-        });
+    if (folder.type === "movie") {
+      const files = await fetchIndex(`${url}${entry}`);
+      const videoFile = files.find(isVideo);
+      items.push({
+        id, type: "movie",
+        name: tmdb?.name || name,
+        poster: tmdb?.poster || null,
+        background: tmdb?.background || null,
+        description: tmdb?.description || "",
+        year: tmdb?.year || "",
+        streamUrl: videoFile ? `${url}${entry}${videoFile}` : null,
+      });
+    } else {
+      // Series â€” scan seasons
+      const seasonFolders = await fetchIndex(`${url}${entry}`);
+      const videos = [];
+      for (const sf of seasonFolders) {
+        if (!sf.endsWith("/")) continue;
+        const seasonName = decodeName(sf);
+        const seasonNum = parseInt(seasonName.match(/\d+/)?.[0] || "1", 10);
+        const epFiles = await fetchIndex(`${url}${entry}${sf}`);
+        for (const file of epFiles) {
+          if (!isVideo(file)) continue;
+          const fileName = decodeName(file);
+          const epMatch = fileName.match(/[Ss](\d{1,2})[Ee](\d{1,2})/) || fileName.match(/(\d{1,2})x(\d{1,2})/);
+          videos.push({
+            season: epMatch ? parseInt(epMatch[1], 10) : seasonNum,
+            episode: epMatch ? parseInt(epMatch[2], 10) : videos.length + 1,
+            title: fileName.replace(/\.[^.]+$/, ""),
+            url: `${url}${entry}${sf}${file}`,
+          });
+        }
       }
+      items.push({
+        id, type: "series",
+        name: tmdb?.name || name,
+        poster: tmdb?.poster || null,
+        background: tmdb?.background || null,
+        description: tmdb?.description || "",
+        year: tmdb?.year || "",
+        videos,
+      });
     }
-
-    shows.push({
-      id,
-      type: "series",
-      name: tmdb?.name || showName,
-      poster: tmdb?.poster || null,
-      background: tmdb?.background || null,
-      description: tmdb?.description || "",
-      year: tmdb?.year || "",
-      videos,
-    });
   }
 
-  cache.tvs = shows;
-  cache.lastFetch = now;
-  return shows;
+  cache[folder.catalogId] = { data: items, time: now };
+  return items;
 }
 
-// ── Catalog handler ───────────────────────────────────────────────────────────
+// â”€â”€ Catalog handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 builder.defineCatalogHandler(async ({ type, id }) => {
-  if (type === "movie" && id === "myserver-movies") {
-    const movies = await getMovies();
-    return {
-      metas: movies.map((m) => ({
-        id: m.id,
-        type: "movie",
-        name: m.name,
-        poster: m.poster,
-        description: m.description,
-        year: m.year,
-      })),
-    };
-  }
-
-  if (type === "series" && id === "myserver-tvs") {
-    const shows = await getTVShows();
-    return {
-      metas: shows.map((s) => ({
-        id: s.id,
-        type: "series",
-        name: s.name,
-        poster: s.poster,
-        description: s.description,
-        year: s.year,
-      })),
-    };
-  }
-
-  return { metas: [] };
+  const folder = FOLDERS.find(f => f.catalogId === id && f.type === type);
+  if (!folder) return { metas: [] };
+  const items = await buildCatalog(folder);
+  return {
+    metas: items.map(m => ({
+      id: m.id, type: m.type, name: m.name,
+      poster: m.poster, description: m.description, year: m.year,
+    }))
+  };
 });
 
-// ── Meta handler ──────────────────────────────────────────────────────────────
+// â”€â”€ Meta handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 builder.defineMetaHandler(async ({ type, id }) => {
   if (!id.startsWith("myserver:")) return { meta: null };
+  const parts = id.split(":");
+  const folderPath = parts[2];
+  const folder = FOLDERS.find(f => f.path === folderPath);
+  if (!folder) return { meta: null };
+  const items = await buildCatalog(folder);
+  const item = items.find(m => m.id === id);
+  if (!item) return { meta: null };
 
-  if (type === "movie") {
-    const movies = await getMovies();
-    const movie = movies.find((m) => m.id === id);
-    if (!movie) return { meta: null };
-    return {
-      meta: {
-        id: movie.id,
-        type: "movie",
-        name: movie.name,
-        poster: movie.poster,
-        background: movie.background,
-        description: movie.description,
-        year: movie.year,
-      },
-    };
+  const meta = {
+    id: item.id, type: item.type, name: item.name,
+    poster: item.poster, background: item.background,
+    description: item.description, year: item.year,
+  };
+
+  if (item.type === "series") {
+    meta.videos = item.videos.map(v => ({
+      id: `${item.id}:${v.season}:${v.episode}`,
+      title: `S${String(v.season).padStart(2,"0")}E${String(v.episode).padStart(2,"0")} â€“ ${v.title}`,
+      season: v.season, episode: v.episode,
+      released: new Date(0).toISOString(),
+      streams: [{ url: v.url, title: "My Server" }],
+    }));
   }
 
-  if (type === "series") {
-    const shows = await getTVShows();
-    const show = shows.find((s) => s.id === id);
-    if (!show) return { meta: null };
-    return {
-      meta: {
-        id: show.id,
-        type: "series",
-        name: show.name,
-        poster: show.poster,
-        background: show.background,
-        description: show.description,
-        year: show.year,
-        videos: show.videos.map((v) => ({
-          id: `${show.id}:${v.season}:${v.episode}`,
-          title: `S${String(v.season).padStart(2, "0")}E${String(v.episode).padStart(2, "0")} – ${v.title}`,
-          season: v.season,
-          episode: v.episode,
-          released: new Date(0).toISOString(),
-          streams: [{ url: v.url, title: "My Server" }],
-        })),
-      },
-    };
-  }
-
-  return { meta: null };
+  return { meta };
 });
 
-// ── Stream handler ────────────────────────────────────────────────────────────
+// â”€â”€ Stream handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 builder.defineStreamHandler(async ({ type, id }) => {
   if (!id.startsWith("myserver:")) return { streams: [] };
 
   if (type === "movie") {
-    const movies = await getMovies();
-    const movie = movies.find((m) => m.id === id);
-    if (!movie?.streamUrl) return { streams: [] };
-    return {
-      streams: [{ url: movie.streamUrl, title: "My Server" }],
-    };
+    const parts = id.split(":");
+    const folderPath = parts[2];
+    const folder = FOLDERS.find(f => f.path === folderPath);
+    if (!folder) return { streams: [] };
+    const items = await buildCatalog(folder);
+    const item = items.find(m => m.id === id);
+    if (!item?.streamUrl) return { streams: [] };
+    return { streams: [{ url: item.streamUrl, title: "My Server" }] };
   }
 
   if (type === "series") {
-    // id format: myserver:series:ShowName:season:episode
     const parts = id.split(":");
-    const showId = `${parts[0]}:${parts[1]}:${parts[2]}`;
-    const season = parseInt(parts[3], 10);
-    const episode = parseInt(parts[4], 10);
-
-    const shows = await getTVShows();
-    const show = shows.find((s) => s.id === showId);
+    const folderPath = parts[2];
+    const showId = `${parts[0]}:${parts[1]}:${parts[2]}:${parts[3]}`;
+    const season = parseInt(parts[4], 10);
+    const episode = parseInt(parts[5], 10);
+    const folder = FOLDERS.find(f => f.path === folderPath);
+    if (!folder) return { streams: [] };
+    const items = await buildCatalog(folder);
+    const show = items.find(s => s.id === showId);
     if (!show) return { streams: [] };
-
-    const vid = show.videos.find(
-      (v) => v.season === season && v.episode === episode
-    );
+    const vid = show.videos.find(v => v.season === season && v.episode === episode);
     if (!vid) return { streams: [] };
-
-    return {
-      streams: [{ url: vid.url, title: "My Server" }],
-    };
+    return { streams: [{ url: vid.url, title: "My Server" }] };
   }
 
   return { streams: [] };
 });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Start â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 serveHTTP(builder.getInterface(), { port: PORT });
-console.log(`Stremio addon running on http://localhost:${PORT}`);
+console.log(`Addon running on port ${PORT}`);
 console.log(`Manifest: http://localhost:${PORT}/manifest.json`);
